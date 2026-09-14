@@ -1,0 +1,87 @@
+name: Build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "8"
+          cache: maven
+
+      - name: Show project files
+        run: |
+          echo "Project root:"
+          pwd
+          echo "Top-level files:"
+          find . -maxdepth 2 -type f | sort | head -200
+
+      - name: Build with Maven
+        if: ${{ hashFiles('pom.xml') != '' }}
+        run: mvn -B package --no-transfer-progress
+
+      - name: Build with Gradle
+        if: ${{ hashFiles('build.gradle', 'build.gradle.kts', 'gradlew') != '' && hashFiles('pom.xml') == '' }}
+        run: |
+          if [ -f ./gradlew ]; then
+            chmod +x ./gradlew
+            ./gradlew build
+          elif [ -f ./build.gradle ] || [ -f ./build.gradle.kts ]; then
+            gradle build
+          fi
+
+      - name: Build plain Java project
+        if: ${{ hashFiles('pom.xml', 'build.gradle', 'build.gradle.kts', 'gradlew') == '' }}
+        shell: bash
+        run: |
+          set -e
+
+          mkdir -p build/classes build/libs
+
+          # Collect Java source files.
+          find . -type f -name "*.java"             -not -path "./build/*"             -not -path "./.gradle/*"             > build/sources.txt
+
+          if [ ! -s build/sources.txt ]; then
+            echo "No Java source files found."
+            exit 1
+          fi
+
+          # Build classpath from every jar in the repository.
+          CP=""
+          while IFS= read -r jar; do
+            if [ -z "$CP" ]; then
+              CP="$jar"
+            else
+              CP="$CP:$jar"
+            fi
+          done < <(find . -type f -name "*.jar" -not -path "./build/*" | sort)
+
+          if [ -n "$CP" ]; then
+            javac -source 8 -target 8 -encoding UTF-8               -cp "$CP"               -d build/classes               @build/sources.txt
+          else
+            javac -source 8 -target 8 -encoding UTF-8               -d build/classes               @build/sources.txt
+          fi
+
+          # Package compiled classes.
+          jar cf build/libs/exhibition-client.jar -C build/classes .
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: exhibition-client
+          path: |
+            build/libs/**
+            target/**
+            out/**
+          if-no-files-found: warn
